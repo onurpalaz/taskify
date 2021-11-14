@@ -1,9 +1,19 @@
 let express = require("express");
-let mongodb = require("mongodb").MongoClient;
+let MongoClient = require("mongodb").MongoClient;
+let ObjectId = require("mongodb").ObjectId;
+let sanitizeHTML = require("sanitize-html");
+
 require("dotenv").config();
 
 let app = express();
 let db;
+
+let port = process.env.PORT;
+if (port == null || port == "") {
+  port = 3000;
+}
+
+app.use(express.static("public"));
 
 let connectionString =
   "mongodb+srv://" +
@@ -12,24 +22,38 @@ let connectionString =
   process.env.DB_PASS +
   "@" +
   process.env.DB_HOST;
-mongodb.connect(
+
+MongoClient.connect(
   connectionString,
   {
     useNewUrlParser: true,
     useUnifiedTopology: true,
   },
-  function (err, client) {
+  (err, client) => {
     db = client.db();
-    app.listen(3000);
+    app.listen(port);
   }
 );
 
+app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-app.get("/", function (req, res) {
+function passwordProtected(req, res, next) {
+  res.set("WWW-Authenticate", "Basic realm='Simple Todo App'");
+  // Login Credentials => Username: username & Password: password
+  if (req.headers.authorization == "Basic dXNlcm5hbWU6cGFzc3dvcmQ=") {
+    next();
+  } else {
+    res.status(401).send("Authentication required");
+  }
+}
+
+app.use(passwordProtected);
+
+app.get("/", (req, res) => {
   db.collection("tasks")
     .find()
-    .toArray(function (err, tasks) {
+    .toArray((err, tasks) => {
       res.send(`
     <!DOCTYPE html>
     <html>
@@ -52,45 +76,64 @@ app.get("/", function (req, res) {
                   </span>
                 </div>
                 <div class="has-background-light p-5">
-                  <form action="/add-task" method="POST">
+                  <form id="task-form" action="/add-task" method="POST">
                       <div class="columns">
                         <div class="column is-four-fifths">
-                          <input name="task" autofocus autocomplete="off" class="input" type="text">
+                          <input id="task-field" name="task" autofocus autocomplete="off" class="input" type="text">
                         </div>
                         <div class="column is-one-fifth">
-                          <a class="button is-info is-fullwidth">
-                          <i class="fas fa-plus-circle mr-3"></i>
-                          <span>
-                            Add New Task
-                          </span>
-                          </a>
+                          <button class="button is-info is-fullwidth">
+                            <i class="fas fa-plus-circle mr-3"></i>
+                            <span>
+                              Add New Task
+                            </span>
+                          </button>
                         </div>
                       </div>
                   </form>
                 </div>
                 
-                <ul class="mt-5">
-                    ${tasks
-                      .map(function (task) {
-                        return `<li class="box is-flex is-justify-content-space-between is-align-items-center mb-3">
-                        <span class="is-family-primary has-text-weight-semibold is-capitalized">${task.text}</span>
-                        <div>
-                        <button class="button is-warning">Edit</button>
-                        <button class="button is-danger">Delete</button>
-                        </div>
-                    </li>`;
-                      })
-                      .join("")}
+                <ul id="task-list" class="mt-5">
+                    
                 </ul>
             </div>
+            <script>
+            let tasks = ${JSON.stringify(tasks)}
+            </script>
+            <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+            <script src="/browser.js"></script>
         </body>
     </html>
     `);
     });
 });
 
-app.post("/add-task", function (req, res) {
-  db.collection("tasks").insertOne({ text: req.body.task }, function () {
-    res.redirect("/");
+app.post("/add-task", (req, res) => {
+  let safeText = sanitizeHTML(req.body.text, {
+    allowedTags: [],
+    allowedAttributes: {},
+  });
+  db.collection("tasks").insertOne({ text: safeText }, (err, info) => {
+    res.json({ _id: info.insertedId.toString(), text: req.body.text });
+  });
+});
+
+app.post("/update-task", (req, res) => {
+  let safeText = sanitizeHTML(req.body.text, {
+    allowedTags: [],
+    allowedAttributes: {},
+  });
+  db.collection("tasks").findOneAndUpdate(
+    { _id: ObjectId(req.body.id) },
+    { $set: { text: safeText } },
+    () => {
+      res.send("Success");
+    }
+  );
+});
+
+app.post("/delete-task", (req, res) => {
+  db.collection("tasks").deleteOne({ _id: ObjectId(req.body.id) }, () => {
+    res.send("Success");
   });
 });
